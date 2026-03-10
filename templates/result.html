@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Result</title>
+</head>
+<body>
+    {% if match %}
+        <h2>✅ Match Found: {{ match }}</h2>
+    {% else %}
+        <h2>❌ No Match Found</h2>
+    {% endif %}
+    <img src="{{ url_for('static', filename='uploads/' + uploaded) }}" width="300">
+    <br><a href="/">Try Again</a>
+</body>
+</html>

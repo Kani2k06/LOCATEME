@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QR → URL Suspicion Scanner (Demo Dataset)</title>
+  <style>
+    body{font-family:Inter,system-ui,Arial;margin:0;background:#0e1628;color:#e6eef8;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .container{max-width:1000px;width:100%;background:#111b30;border-radius:12px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+    h1{margin-top:0;font-size:20px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{background:#15213a;border-radius:10px;padding:14px}
+    input,button{border-radius:8px;padding:8px;border:none}
+    input[type="text"]{width:100%}
+    button{background:#60a5fa;color:#041024;font-weight:600;cursor:pointer}
+    ul{list-style:none;padding:0;margin:8px 0}
+    li.rule{padding:6px;border-radius:8px;background:rgba(255,255,255,0.05);margin-bottom:6px}
+    .badge{padding:6px 10px;border-radius:999px;font-weight:700}
+    .green{background:#052e1f;color:#34d399}
+    .red{background:#3a0710;color:#fb7185}
+    img.qrthumb{width:80px;height:80px;border-radius:8px;cursor:pointer;border:1px solid rgba(255,255,255,0.1)}
+    .muted{color:#9aa6bf;font-size:13px}
+  </style>
+</head>
+<body>
+<div class="container">
+<h1>QR → URL Suspicion Scanner (Rule-Based + Demo QRs)</h1>
+<p class="muted">Try one of the built-in QR codes or upload your own. The tool decodes and evaluates the URL using heuristic rules.</p>
+
+<div class="grid">
+  <div class="card">
+    <label>Upload QR or paste URL</label><br/>
+    <input id="file" type="file" accept="image/*"><br/><br/>
+    <input id="urlPaste" type="text" placeholder="https://example.com/login"><br/><br/>
+    <button id="analyzeBtn">Decode & Analyze</button>
+
+    <p class="muted" style="margin-top:10px">Built-in QR samples (click to load):</p>
+    <div id="demoQrs" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  </div>
+
+  <div class="card">
+    <div class="muted">Decoded URL:</div>
+    <div id="decodedUrl" style="word-break:break-all">—</div>
+    <div class="muted" style="margin-top:8px">Score:</div>
+    <div id="scoreWrap"><span class="badge green">0</span></div>
+    <div class="muted" style="margin-top:8px">Decision:</div>
+    <div id="decision">—</div>
+    <div class="muted" style="margin-top:8px">Triggered rules:</div>
+    <ul id="rulesList"></ul>
+  </div>
+</div>
+</div>
+
+<script src="https://unpkg.com/qr-scanner/qr-scanner.min.js"></script>
+<script>
+const el=id=>document.getElementById(id);
+
+// ----- Built-in demo QR codes (base64 data URIs) -----
+const demoQRs=[
+  {label:'Legit Google login',url:'https://accounts.google.com/signin',img:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAABG0lEQVR4nO3BMQEAAADCoPdPbQ8HFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgWgJvAAHEBJeAAAAAElFTkSuQmCC'},
+  {label:'Fake Google lookalike',url:'https://accounts-google.com/secure-login',img:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAABG0lEQVR4nO3BMQEAAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgWgJvAAHEBJeAAAAAElFTkSuQmCC'},
+  {label:'Shortened redirect',url:'https://tinyurl.com/login-update',img:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAABG0lEQVR4nO3BMQEAAADCoPdPbQ9HqAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgWgJvAAHEBJeAAAAAElFTkSuQmCC'},
+  {label:'IP-based URL',url:'http://192.168.1.5:8080/login',img:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAABG0lEQVR4nO3BMQEAAADCoPdPbQ9OqAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgWgJvAAHEBJeAAAAAElFTkSuQmCC'}
+];
+const qrContainer=el('demoQrs');
+demoQRs.forEach((q,i)=>{
+  const img=document.createElement('img');
+  img.src=q.img;
+  img.alt=q.label;
+  img.className='qrthumb';
+  img.title=q.label;
+  img.onclick=()=>{el('urlPaste').value=q.url;alert('Loaded demo URL: '+q.url);};
+  qrContainer.appendChild(img);
+});
+
+// ----- Rules -----
+const rules=[
+ {id:'no-https',score:20,reason:'No HTTPS.',test:u=>u.protocol!=='https:'},
+ {id:'ip',score:25,reason:'Domain is an IP.',test:u=>/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(u.hostname)},
+ {id:'shortener',score:18,reason:'Shortened link.',test:u=>['tinyurl.com','bit.ly','t.co'].includes(u.hostname)},
+ {id:'fake-brand',score:20,reason:'Contains “google” but not legitimate domain.',test:u=>u.hostname.includes('google')&&!u.hostname.endsWith('google.com')},
+ {id:'login-keyword',score:10,reason:'Contains login keyword.',test:u=>/login|signin|secure/i.test(u.href)}
+];
+
+// ----- Core -----
+function analyze(raw){
+  try{var u=new URL(raw);}catch(e){return {ok:false,msg:'Invalid URL'};}
+  let score=0,triggers=[];
+  rules.forEach(r=>{if(r.test(u)){score+=r.score;triggers.push(r);}});
+  const decision=score>30?'SUSPICIOUS':'Likely OK';
+  return {ok:true,url:u.href,score,decision,triggers};
+}
+
+function render(r){
+  if(!r.ok){el('decodedUrl').textContent=r.msg;return;}
+  el('decodedUrl').textContent=r.url;
+  el('scoreWrap').innerHTML=<span class="badge ${r.score>30?'red':'green'}">${r.score}</span>;
+  el('decision').textContent=r.decision;
+  const ul=el('rulesList');ul.innerHTML='';
+  r.triggers.forEach(t=>{
+    const li=document.createElement('li');li.className='rule';
+    li.innerHTML=${t.id}: ${t.reason};
+    ul.appendChild(li);
+  });
+  if(r.triggers.length===0)ul.innerHTML='<li class="rule">No suspicious rules triggered.</li>';
+}
+
+// ----- QR Decode or manual -----
+el('file').addEventListener('change',async e=>{
+  if(!e.target.files.length)return;
+  try{
+    const res=await QrScanner.scanImage(e.target.files[0]);
+    el('urlPaste').value=res;
+    alert('Decoded URL: '+res);
+  }catch(err){alert('QR decode failed');}
+});
+el('analyzeBtn').onclick=()=>{
+  const raw=el('urlPaste').value.trim();
+  if(!raw)return alert('Paste a URL or pick a QR.');
+  const r=analyze(raw);
+  render(r);
+};
+</script>
+</body>
+</html>
